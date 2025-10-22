@@ -100,7 +100,7 @@ void setup() {
 }
 
 void loop() {
-  delay(2500);
+  delay(1500);
   Net::handle();
   
   // Read sensor data
@@ -155,7 +155,7 @@ void loop() {
   
   // Publish to MQTT if configured (uses stored cfg values from setup)
   // Will auto-reconnect and respect interval
-  static const char* mqttClientId = "esp32c3-room204";
+  static const char* mqttClientId = "room67";
   static const char* mqttUser = nullptr;
   static const char* mqttPass = nullptr;
   Net::publishMqtt(mqttClientId, mqttUser, mqttPass);

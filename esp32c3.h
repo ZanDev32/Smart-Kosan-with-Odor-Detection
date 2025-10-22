@@ -58,6 +58,7 @@ inline volatile uint32_t gTS = 0;
 // MQTT state
 inline WiFiClient& wifiClient() { static WiFiClient c; return c; }
 inline PubSubClient& mqttClient() { static PubSubClient c(wifiClient()); return c; }
+inline bool gMqttEnabled = false;
 inline uint32_t gLastMqttAttempt = 0;
 inline uint32_t gLastMqttPublish = 0;
 inline const char* gRoomId = "204";
@@ -86,7 +87,91 @@ inline void _setCors() {
 
 inline void _handleRoot() {
   _setCors();
-  server().send(200, "text/plain", "OK. GET /state for JSON.\n");
+  const char html[] PROGMEM = R"rawliteral(
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Air Quality Monitor</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font:14px system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#f5f5f5;padding:20px}
+    .container{max-width:600px;margin:0 auto;background:#fff;border-radius:12px;padding:20px;box-shadow:0 2px 8px rgba(0,0,0,0.1)}
+    h1{font-size:24px;margin-bottom:4px;color:#333}
+    .subtitle{color:#666;font-size:13px;margin-bottom:20px}
+    .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px}
+    .card{background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);border-radius:10px;padding:16px;color:#fff}
+    .card.temp{background:linear-gradient(135deg,#f093fb 0%,#f5576c 100%)}
+    .card.hum{background:linear-gradient(135deg,#4facfe 0%,#00f2fe 100%)}
+    .card.hi{background:linear-gradient(135deg,#fa709a 0%,#fee140 100%)}
+    .card.co2{background:linear-gradient(135deg,#30cfd0 0%,#330867 100%)}
+    .label{font-size:12px;opacity:0.9;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.5px}
+    .value{font-size:32px;font-weight:700;line-height:1}
+    .unit{font-size:18px;opacity:0.9;margin-left:4px}
+    .footer{text-align:center;color:#999;font-size:12px;padding-top:12px;border-top:1px solid #eee}
+    .status{display:inline-block;width:8px;height:8px;border-radius:50%;background:#4caf50;margin-right:6px;animation:pulse 2s infinite}
+    @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.5}}
+    .error{color:#f44336}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🌡️ Air Quality Monitor</h1>
+    <div class="subtitle">ESP32-C3 Real-time Sensor Dashboard</div>
+    
+    <div class="grid">
+      <div class="card temp">
+        <div class="label">Temperature</div>
+        <div class="value" id="t">--</div>
+      </div>
+      <div class="card hum">
+        <div class="label">Humidity</div>
+        <div class="value" id="h">--</div>
+      </div>
+      <div class="card hi">
+        <div class="label">Heat Index</div>
+        <div class="value" id="hi">--</div>
+      </div>
+      <div class="card co2">
+        <div class="label">CO₂ Level</div>
+        <div class="value" id="co2">--</div>
+      </div>
+    </div>
+    
+    <div class="footer">
+      <span class="status"></span>
+      <span id="status">Connecting...</span> • 
+      Last update: <span id="ts">--</span>
+    </div>
+  </div>
+
+  <script>
+  async function update(){
+    try{
+      const r = await fetch('/state', {cache: 'no-store'});
+      if(!r.ok) throw new Error(r.status);
+      const d = await r.json();
+      document.getElementById('t').innerHTML = d.t.toFixed(1) + '<span class="unit">°C</span>';
+      document.getElementById('h').innerHTML = d.h.toFixed(1) + '<span class="unit">%</span>';
+      document.getElementById('hi').innerHTML = d.hi.toFixed(1) + '<span class="unit">°C</span>';
+      document.getElementById('co2').innerHTML = d.co2.toFixed(0) + '<span class="unit">ppm</span>';
+      document.getElementById('ts').textContent = new Date().toLocaleTimeString();
+      document.getElementById('status').textContent = 'Connected';
+      document.getElementById('status').className = '';
+    }catch(e){
+      document.getElementById('status').textContent = 'Connection Error';
+      document.getElementById('status').className = 'error';
+      console.error(e);
+    }
+  }
+  update();
+  setInterval(update, 2000);
+  </script>
+</body>
+</html>
+)rawliteral";
+  server().send(200, "text/html", html);
 }
 
 inline void _handleState() {
@@ -224,12 +309,16 @@ inline void begin(const Config& cfg = Config{}) {
 
   // Initialize MQTT if configured
   if (cfg.mqtt_server && cfg.mqtt_server[0]) {
+    gMqttEnabled = true;
     gRoomId = cfg.room_id;
     gMqttTopic = cfg.mqtt_topic;
     gMqttInterval = cfg.mqtt_interval_ms;
     mqttClient().setServer(cfg.mqtt_server, cfg.mqtt_port);
     Serial.print(F("[NET] MQTT broker: ")); Serial.print(cfg.mqtt_server);
     Serial.print(":"); Serial.println(cfg.mqtt_port);
+  } else {
+    gMqttEnabled = false;
+    Serial.println(F("[NET] MQTT disabled (no broker configured)"));
   }
 
   // routes
@@ -294,6 +383,9 @@ inline String formatSensorJson(const char* roomId, float t, float h, float hi, f
 
 // Publish sensor data to MQTT if enabled and interval elapsed
 inline bool publishMqtt(const char* clientId, const char* user, const char* pass) {
+  // Skip if MQTT not configured
+  if (!gMqttEnabled) return false;
+  
   if (!mqttClient().connected()) {
     if (!mqttReconnect(clientId, user, pass)) return false;
   }
@@ -315,7 +407,9 @@ inline bool publishMqtt(const char* clientId, const char* user, const char* pass
 
 inline void handle() {
   server().handleClient();
-  mqttClient().loop(); // MQTT keep-alive
+  if (gMqttEnabled) {
+    mqttClient().loop(); // MQTT keep-alive (only if enabled)
+  }
 }
 
 // panggil setelah baca sensor
@@ -336,4 +430,4 @@ inline IPAddress ip() {
   return IPAddress(0,0,0,0);
 }
 
-} // namespace Net
+} // IMPORTANT namespace Net
