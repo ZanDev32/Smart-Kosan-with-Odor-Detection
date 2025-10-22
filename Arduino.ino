@@ -1,3 +1,22 @@
+/*
+ * ESP32-C3 Odor Sensor Project
+ * 
+ * PIN CONFIGURATION (ESP32-C3):
+ * =============================
+ * DHT22:     GPIO4 (Digital)
+ * SH1106:    GPIO8 (SDA), GPIO9 (SCL) - I2C
+ * MQ135:     GPIO0 (Analog ADC), GPIO10 (Digital)
+ * 
+ * IMPORTANT NOTES:
+ * - ESP32-C3 ADC-capable pins: GPIO0, GPIO1, GPIO2, GPIO3, GPIO4
+ * - GPIO0: Boot mode pin (pulled LOW = download mode). Avoid if possible or ensure it's not pulled LOW during boot
+ * - GPIO1-4: Safe for ADC usage
+ * - GPIO8, GPIO9: Default I2C pins for many ESP32-C3 boards
+ * 
+ * If you experience boot issues with GPIO0, change MQ135_ANALOG_PIN to GPIO4
+ * and move DHT22 to another available GPIO (e.g., GPIO5, GPIO6, GPIO7)
+ */
+
 // Display and DHT headers
 #include "SSH1106.h"
 #include "DHT22.h"
@@ -11,9 +30,12 @@
 #undef MQ135_ADC_BIT_RESOLUTION
 #define MQ135_ADC_BIT_RESOLUTION 12
 #undef MQ135_ANALOG_PIN
-#define MQ135_ANALOG_PIN 2   // GPIO2 (ADC)
+// ESP32-C3 Valid ADC Pins: GPIO0, GPIO1, GPIO2, GPIO3, GPIO4
+// Recommended: GPIO0 or GPIO4 (GPIO0 may affect boot if pulled LOW)
+// If boot issues occur, use GPIO4 instead
+#define MQ135_ANALOG_PIN 0   // GPIO0 (ADC1_CH0) - Valid ADC pin on ESP32-C3
 #undef MQ135_DIGITAL_PIN
-#define MQ135_DIGITAL_PIN 1  // GPIO1 (Digital DOUT)
+#define MQ135_DIGITAL_PIN 10  // GPIO10 (Digital DOUT) - Changed from GPIO1 to avoid conflicts
 
 #include "MQ135.h"
 
@@ -25,20 +47,31 @@ void setup() {
   Serial.begin(9600);
   delay(2000);
   
+  Serial.println(F("=== ESP32-C3 Odor Sensor Starting ==="));
+  
 #ifdef ESP32
   // Ensure ADC resolution matches our MQ135 configuration on ESP32-C3
   analogReadResolution(MQ135_ADC_BIT_RESOLUTION);
   // Use full-scale attenuation for up to ~3.3V input range on ESP32-C3 ADC
   analogSetPinAttenuation(MQ135_ANALOG_PIN, ADC_11db);
+  Serial.print(F("ADC configured: Pin=GPIO"));
+  Serial.print(MQ135_ANALOG_PIN);
+  Serial.print(F(", Resolution="));
+  Serial.print(MQ135_ADC_BIT_RESOLUTION);
+  Serial.println(F(" bits"));
 #endif
   
+  // Initialize DHT22 sensor
   dht22.begin();
+  Serial.println(F("DHT22 initialized"));
 
+  // Initialize OLED display (this will initialize I2C)
   if (!oled.begin()) {
     Serial.println(F("SH1106 allocation failed"));
     while (1);
   }
   oled.clear();
+  Serial.println(F("SH1106 display initialized"));
 
   // Initialize MQ-135 (place in clean air during calibration)
   Serial.println(F("Calibrating MQ-135 in clean air..."));
@@ -55,7 +88,7 @@ void setup() {
   Net::Config cfg;
   cfg.ssid = "morning";
   cfg.pass = "mieayam9";
-  cfg.hostname = "smart-kosan-odor-detection"; // mDNS: http://smart-kosan-odor-detection.local/
+  cfg.hostname = "odor-sensor"; // mDNS: http://odor-sensor.local/ 
   // cfg.sta_ip = IPAddress(192,168,23,230);
   // cfg.sta_gw = IPAddress(192,168,1,1);
   // cfg.sta_sn = IPAddress(255,255,255,0);
@@ -91,12 +124,11 @@ void setup() {
     delay(100);
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.print("IP: "); Serial.println(WiFi.localIP());  // your ESP IP
-  } else {
+  if (WiFi.status() == !WL_CONNECTED) {
     Serial.println("WiFi connect failed");
-    WiFi.disconnect(true, true);    // clear cached creds/NVS
+    WiFi.disconnect(true, true);
   }
+  Serial.println("");
 }
 
 void loop() {
@@ -108,12 +140,27 @@ void loop() {
   float temperature = dht22.readTemperature();
   // Update MQ135 first, then read a gas value (CO2 approximation)
   mq135.update();
+  
+  // Print diagnostics every 10 loops to check sensor health
+  static int loopCount = 0;
+  if (++loopCount >= 10) {
+    loopCount = 0;
+    mq135.printDiagnostics();
+  }
+  
   // Simple moving average over N samples to reduce spikes
   static const int N = 5;
   static float buf[N];
   static int idx = 0;
   static int filled = 0;
   float co2_raw = mq135.readCO2();
+  
+  // Debug: print raw CO2 reading every 10 loops
+  if (loopCount == 0) {
+    Serial.print(F("[DEBUG] Raw CO2 from readCO2(): "));
+    Serial.println(co2_raw, 3);
+  }
+  
   buf[idx] = co2_raw;
   idx = (idx + 1) % N;
   if (filled < N) filled++;

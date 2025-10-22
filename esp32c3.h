@@ -269,18 +269,27 @@ inline void begin(const Config& cfg = Config{}) {
   if (WiFi.status() == WL_CONNECTED) {
     // connected as STA
     Serial.print(F("[NET] STA IP: ")); Serial.println(WiFi.localIP());
+    Serial.print(F("[NET] Gateway: ")); Serial.println(WiFi.gatewayIP());
+    Serial.print(F("[NET] DNS: ")); Serial.println(WiFi.dnsIP());
+    
     // Start mDNS (wait for IP to be fully configured)
-    delay(100);
+    delay(500);
     if (cfg.hostname && cfg.hostname[0]) {
+      Serial.print(F("[NET] Starting mDNS with hostname: ")); Serial.println(cfg.hostname);
       if (MDNS.begin(cfg.hostname)) {
         MDNS.addService("http", "tcp", 80);
-        Serial.print(F("[NET] mDNS started: http://")); Serial.print(cfg.hostname); Serial.println(F(".local/"));
-        Serial.print(F("[NET] Hostname: ")); Serial.println(cfg.hostname);
+        Serial.println(F("[NET] ✓ mDNS started successfully"));
+        Serial.print(F("[NET] Access at: http://")); Serial.print(cfg.hostname); Serial.println(F(".local/"));
+        Serial.print(F("[NET] Or use IP: http://")); Serial.println(WiFi.localIP());
       } else {
-        Serial.println(F("[NET] ERROR: mDNS begin failed!"));
+        Serial.println(F("[NET] ✗ mDNS begin FAILED!"));
+        Serial.println(F("[NET] Try:"));
+        Serial.println(F("[NET]   1. Use IP address instead"));
+        Serial.println(F("[NET]   2. Check if hostname is valid (no spaces/special chars)"));
+        Serial.println(F("[NET]   3. Ensure Bonjour/Avahi is installed on your device"));
       }
     } else {
-      Serial.println(F("[NET] WARNING: No hostname set for mDNS"));
+      Serial.println(F("[NET] WARNING: No hostname configured for mDNS"));
     }
   } else if (cfg.enable_ap_fallback) {
     // fallback SoftAP
